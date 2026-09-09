@@ -223,7 +223,9 @@ export function registerSttHandlers(ctx: MainProcessContext): void {
         mkdirSync(gpuDir, { recursive: true })
       }
 
-      const zipUrl = 'https://miyuapp.aiqji.com/whisper.zip'
+      // 原作者的下载地址已失效（404），改用 whisper.cpp 官方 release 的 cuBLAS 12.4 包
+      // （实测 CUDA 12.4 构建通过 PTX JIT 支持 RTX 50 系 Blackwell sm_120）
+      const zipUrl = 'https://github.com/ggerganov/whisper.cpp/releases/latest/download/whisper-cublas-12.4.0-bin-x64.zip'
       const zipPath = join(gpuDir, 'whisper.zip')
       const tempPath = zipPath + '.tmp'
 
@@ -248,6 +250,27 @@ export function registerSttHandlers(ctx: MainProcessContext): void {
         return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
       }
 
+      // GitHub release 链接会 302 跳转到 CDN，跟随重定向并保留 Range/HEAD 语义；
+      // 每一跳都更新 cancelState.request 并挂 error/timeout，保证取消与重试逻辑不失效
+      const httpsGetFollow = (url: string, options: any, onResponse: (res: any) => void, onError: (e: Error) => void): void => {
+        const follow = (u: string, redirectsLeft: number) => {
+          const req = https.get(u, options, (res: any) => {
+            if (redirectsLeft > 0 && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+              res.resume()
+              follow(new URL(res.headers.location, u).href, redirectsLeft - 1)
+              return
+            }
+            onResponse(res)
+          })
+          cancelState.request = req
+          req.on('error', onError)
+          req.setTimeout(30000, () => {
+            req.destroy(new Error('请求超时'))
+          })
+        }
+        follow(url, 5)
+      }
+
       // 检查是否有未完成的下载
       let downloadedBytes = 0
       if (existsSync(tempPath)) {
@@ -263,15 +286,14 @@ export function registerSttHandlers(ctx: MainProcessContext): void {
         // 先获取文件总大小
         const getFileSize = (): Promise<number> => {
           return new Promise((resolve, reject) => {
-            const request = https.get(zipUrl, { method: 'HEAD' }, (res: any) => {
+            httpsGetFollow(zipUrl, { method: 'HEAD' }, (res: any) => {
               if (res.statusCode === 200) {
                 const size = parseInt(res.headers['content-length'] || '0')
                 resolve(size)
               } else {
                 reject(new Error(`获取文件大小失败: ${res.statusCode}`))
               }
-            }).on('error', reject)
-            cancelState.request = request
+            }, reject)
           })
         }
 
@@ -319,7 +341,7 @@ export function registerSttHandlers(ctx: MainProcessContext): void {
                     }
                   }
 
-                  const request = https.get(zipUrl, options, (res: any) => {
+                  httpsGetFollow(zipUrl, options, (res: any) => {
                     if (cancelState.cancelled) {
                       res.destroy(new Error(GPU_DOWNLOAD_CANCELLED_MESSAGE))
                       reject(new Error(GPU_DOWNLOAD_CANCELLED_MESSAGE))
@@ -371,15 +393,8 @@ export function registerSttHandlers(ctx: MainProcessContext): void {
                     res.on('error', (error: Error) => {
                       reject(cancelState.cancelled ? new Error(GPU_DOWNLOAD_CANCELLED_MESSAGE) : error)
                     })
-                  })
-
-                  cancelState.request = request
-                  request.on('error', (error: Error) => {
+                  }, (error: Error) => {
                     reject(cancelState.cancelled ? new Error(GPU_DOWNLOAD_CANCELLED_MESSAGE) : error)
-                  })
-                  request.setTimeout(30000, () => {
-                    request.destroy()
-                    reject(new Error('请求超时'))
                   })
                 })
 
@@ -510,7 +525,7 @@ export function registerSttHandlers(ctx: MainProcessContext): void {
         'whisper.dll',
         'ggml.dll',
         'ggml-base.dll',
-        'ggml-cpu.dll',
+        'ggml-cpu-x64.dll',
         'ggml-cuda.dll',
         'SDL2.dll',
         'cudart64_12.dll',
