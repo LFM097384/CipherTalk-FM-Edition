@@ -1,13 +1,26 @@
 import type { ChatSession, Message } from '../../../types/models'
 import { isGroupChat } from './messageGuards'
 
+const VOICE_TRANSCRIBE_CONCURRENCY = 3
+
+interface FormattedEntry {
+  name: string
+  text: string
+}
+
 /**
  * 把消息格式化为"昵称: 内容"的纯文本，每行一条，按传入数组顺序（调用方保证从旧到新）。
  * 昵称规则与分享海报一致：自己→"我"；群聊成员逐个查 getContactAvatar（失败 fallback 到 username）；
- * 私聊对方→会话显示名。语音消息（localType 34）查 STT 转写缓存，命中则把 "[语音]" 占位换成
- * "[语音] 转写文字"，失败保持占位、不现场转写。parsedContent 为空的消息（系统消息等）直接跳过。
+ * 私聊对方→会话显示名。语音消息（localType 34）先查 STT 转写缓存，命中则把 "[语音]" 占位换成
+ * "[语音] 转写文字"；未命中则现场转写（取语音数据 + STT，结果写入缓存），转写链路任一步失败都
+ * 保持 "[语音]" 占位、不中断整体复制。现场转写以并发池（上限 3）执行，通过 onProgress 上报进度
+ * （total 为需要现场转写的语音条数）。parsedContent 为空的消息（系统消息等）直接跳过。
  */
-export async function formatMessagesAsText(session: ChatSession, messages: Message[]): Promise<string> {
+export async function formatMessagesAsText(
+  session: ChatSession,
+  messages: Message[],
+  onProgress?: (done: number, total: number) => void
+): Promise<string> {
   const group = isGroupChat(session.username)
 
   // 群聊：先解析所有唯一发送者的昵称
@@ -28,18 +41,13 @@ export async function formatMessagesAsText(session: ChatSession, messages: Messa
     }))
   }
 
-  const lines: string[] = []
+  const entries: FormattedEntry[] = []
+  const pendingVoice: { entry: FormattedEntry; msg: Message }[] = []
+
   for (const msg of messages) {
-    let text = msg.parsedContent?.trim()
+    const text = msg.parsedContent?.trim()
     if (!text) continue
-    if (msg.localType === 34) {
-      try {
-        const cached = await window.electronAPI.stt.getCachedTranscript(session.username, msg.createTime, msg.localId)
-        if (cached.success && cached.transcript) text = `[语音] ${cached.transcript}`
-      } catch {
-        // 查缓存失败保持占位
-      }
-    }
+
     let name: string
     if (msg.isSend === 1) {
       name = '我'
@@ -48,7 +56,62 @@ export async function formatMessagesAsText(session: ChatSession, messages: Messa
     } else {
       name = session.displayName || session.username
     }
-    lines.push(`${name}: ${text}`)
+
+    const entry: FormattedEntry = { name, text }
+    entries.push(entry)
+
+    if (msg.localType === 34) {
+      try {
+        const cached = await window.electronAPI.stt.getCachedTranscript(session.username, msg.createTime, msg.localId)
+        if (cached.success && cached.transcript) {
+          entry.text = `[语音] ${cached.transcript}`
+        } else {
+          pendingVoice.push({ entry, msg })
+        }
+      } catch {
+        // 查缓存失败，加入现场转写队列
+        pendingVoice.push({ entry, msg })
+      }
+    }
   }
-  return lines.join('\n')
+
+  if (pendingVoice.length > 0) {
+    let done = 0
+    onProgress?.(done, pendingVoice.length)
+    let cursor = 0
+    const worker = async () => {
+      while (cursor < pendingVoice.length) {
+        const { entry, msg } = pendingVoice[cursor++]
+        try {
+          const result = await window.electronAPI.chat.getVoiceData(
+            session.username,
+            String(msg.localId),
+            msg.createTime,
+            msg.serverId
+          )
+          if (result.success && result.data) {
+            const transcribeResult = await window.electronAPI.stt.transcribe(
+              result.data,
+              session.username,
+              msg.createTime,
+              false,
+              msg.localId
+            )
+            if (transcribeResult.success && transcribeResult.transcript) {
+              entry.text = `[语音] ${transcribeResult.transcript}`
+            }
+          }
+        } catch {
+          // 现场转写失败，保持占位
+        }
+        done++
+        onProgress?.(done, pendingVoice.length)
+      }
+    }
+    await Promise.all(
+      Array.from({ length: Math.min(VOICE_TRANSCRIBE_CONCURRENCY, pendingVoice.length) }, () => worker())
+    )
+  }
+
+  return entries.map((e) => `${e.name}: ${e.text}`).join('\n')
 }

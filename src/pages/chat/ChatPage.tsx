@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Button } from '@heroui/react'
-import { Comment, Copy, Picture, Xmark } from '@gravity-ui/icons'
+import { Comment, Copy, Picture, SquareCheck, Xmark } from '@gravity-ui/icons'
 import { useChatStore, MAX_ACTIVE_MESSAGES } from '../../stores/chatStore'
 import { useUpdateStatusStore } from '../../stores/updateStatusStore'
 import ChatBackground from '../../components/ChatBackground'
@@ -26,6 +26,7 @@ import type { BatchImageMessage } from './types'
 import { isReplySuggestSession } from './replySuggest'
 import { checkOnlineSttConfigReady } from './utils/sttConfig'
 import { formatMessagesAsText } from './utils/copyChatText'
+import { isSystemMessage } from './utils/messageGuards'
 import { formatSessionTime } from './utils/time'
 import { createLiquidGlassMap, type GlassFilterMap } from '../../utils/liquidGlass'
 
@@ -216,6 +217,9 @@ function ChatPage(_props: ChatPageProps) {
   } = useContextMenuState()
   const [selectedMessages, setSelectedMessages] = useState<Set<number>>(new Set())
   const [selectMode, setSelectMode] = useState(false)
+  const selectAnchorRef = useRef<number | null>(null) // 范围多选（shift+click）的锚点 localId
+  const [isCopyingText, setIsCopyingText] = useState(false)
+  const [copyTextProgress, setCopyTextProgress] = useState({ done: 0, total: 0 })
   const [showEnlargeView, setShowEnlargeView] = useState<{ message: Message; content: string } | null>(null)
   const { showTopToast } = useTopToast()
   const [showMessageInfo, setShowMessageInfo] = useState<Message | null>(null) // 消息信息弹窗
@@ -266,26 +270,49 @@ function ChatPage(_props: ChatPageProps) {
   const enterSelectMode = useCallback((localId: number) => {
     setSelectMode(true)
     setSelectedMessages(new Set([localId]))
+    selectAnchorRef.current = localId
   }, [])
 
   const exitSelectMode = useCallback(() => {
     setSelectMode(false)
     setSelectedMessages(new Set())
+    selectAnchorRef.current = null
   }, [])
 
-  const toggleSelectMessage = useCallback((localId: number) => {
+  const toggleSelectMessage = useCallback((localId: number, shiftKey?: boolean) => {
+    const anchor = selectAnchorRef.current
+    if (shiftKey && anchor !== null && anchor !== localId) {
+      const anchorIndex = messagesRef.current.findIndex(m => m.localId === anchor)
+      const targetIndex = messagesRef.current.findIndex(m => m.localId === localId)
+      if (anchorIndex !== -1 && targetIndex !== -1) {
+        const [start, end] = anchorIndex < targetIndex ? [anchorIndex, targetIndex] : [targetIndex, anchorIndex]
+        setSelectedMessages(prev => {
+          const next = new Set(prev)
+          for (let i = start; i <= end; i++) next.add(messagesRef.current[i].localId)
+          return next
+        })
+        return
+      }
+    }
     setSelectedMessages(prev => {
       const next = new Set(prev)
       if (next.has(localId)) next.delete(localId)
       else next.add(localId)
       return next
     })
+    selectAnchorRef.current = localId
+  }, [])
+
+  const selectAllMessages = useCallback(() => {
+    const all = new Set(messagesRef.current.filter(m => !isSystemMessage(m)).map(m => m.localId))
+    setSelectedMessages(all)
   }, [])
 
   // 切换会话时退出多选模式
   useEffect(() => {
     setSelectMode(false)
     setSelectedMessages(new Set())
+    selectAnchorRef.current = null
   }, [currentSessionId])
 
   const posterMessages = useMemo(
@@ -322,21 +349,29 @@ function ChatPage(_props: ChatPageProps) {
 
   // 复制聊天记录为纯文本（多选操作栏"复制文本"与 ChatHeader"复制已加载记录"共用）
   const handleCopyChatText = useCallback(async (messagesToCopy: Message[]) => {
+    if (isCopyingText) return
     const session = sessions.find(s => s.username === currentSessionId)
     if (!session) {
       showTopToast('当前会话不存在', false)
       return
     }
+    setIsCopyingText(true)
+    setCopyTextProgress({ done: 0, total: 0 })
     try {
-      const text = await formatMessagesAsText(session, messagesToCopy)
+      const text = await formatMessagesAsText(session, messagesToCopy, (done, total) => {
+        setCopyTextProgress({ done, total })
+      })
       await navigator.clipboard.writeText(text)
       const count = text ? text.split('\n').length : 0
       showTopToast(`已复制 ${count} 条消息`, true)
     } catch (error) {
       console.error('[ChatPage] 复制聊天记录失败', error)
       showTopToast('复制失败', false)
+    } finally {
+      setIsCopyingText(false)
+      setCopyTextProgress({ done: 0, total: 0 })
     }
-  }, [currentSessionId, sessions, showTopToast])
+  }, [currentSessionId, isCopyingText, sessions, showTopToast])
 
   const handleCopyLoadedMessages = useCallback(
     () => handleCopyChatText(messages),
@@ -1762,13 +1797,24 @@ function ChatPage(_props: ChatPageProps) {
                     </Button>
                     <Button
                       className="select-action-bar__btn"
-                      isDisabled={selectedMessages.size === 0}
+                      size="sm"
+                      variant="tertiary"
+                      onPress={selectAllMessages}
+                    >
+                      <SquareCheck className="size-4 shrink-0" />
+                      全选
+                    </Button>
+                    <Button
+                      className="select-action-bar__btn"
+                      isDisabled={selectedMessages.size === 0 || isCopyingText}
                       size="sm"
                       variant="tertiary"
                       onPress={() => void handleCopyChatText(posterMessages)}
                     >
                       <Copy className="size-4 shrink-0" />
-                      复制文本
+                      {isCopyingText && copyTextProgress.total > 0
+                        ? `转写中 ${copyTextProgress.done}/${copyTextProgress.total}`
+                        : isCopyingText ? '复制中…' : '复制文本'}
                     </Button>
                     <Button
                       className="select-action-bar__btn select-action-bar__btn--primary"

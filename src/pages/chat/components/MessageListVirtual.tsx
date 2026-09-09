@@ -25,7 +25,7 @@ interface MessageListVirtualProps {
   quoteStyle: QuoteStyle
   selectedMessages: Set<number>
   selectMode: boolean
-  onToggleSelect: (localId: number) => void
+  onToggleSelect: (localId: number, shiftKey?: boolean) => void
   setContextMenu: React.Dispatch<React.SetStateAction<ContextMenuState | null>>
   showScrollToBottom: boolean
   scrollToBottom: (smooth?: boolean | React.MouseEvent) => void
@@ -300,7 +300,7 @@ export function MessageListVirtual({
         className={`message-wrapper vlist-row ${wrapperClass}${isSelectable ? ' selectable' : ''}${isSelectable && isSelected ? ' selected' : ''}${expandedImageGroup ? ' image-group-expanded-item' : ''}${isCollapsing ? ' is-collapsing' : ''}${isSettling ? ' image-group-settling' : ''}`}
         style={groupMotionStyle}
         data-message-key={messageDomKey}
-        onClick={isSelectable ? () => onToggleSelect(msg.localId) : undefined}
+        onClick={isSelectable ? (e) => onToggleSelect(msg.localId, e.shiftKey) : undefined}
       >
         {showDateDivider && (
           <div className="date-divider">
