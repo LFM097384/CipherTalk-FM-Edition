@@ -38,7 +38,7 @@ function rowToChatSession(row: any): ChatSession | null {
     sortTimestamp: sortTs,
     lastTimestamp: lastTs,
     lastMsgType: row.last_msg_type || row.lastMsgType || 0,
-    displayName: isFoldGroup ? '折叠的聊天' : isOfficialFolder ? '公众号' : username,
+    displayName: isFoldGroup ? '折叠的聊天' : isOfficialFolder ? '公众号' : (row.remark || row.nickname || row.nick_name || username),
     isWeCom: !isFoldGroup && !isOfficialFolder && !isOfficialAccount && username.includes('@openim'),
     isFoldGroup: isFoldGroup || undefined,
     isOfficialFolder: isOfficialFolder || undefined,
