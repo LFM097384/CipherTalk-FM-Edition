@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { Button } from '@heroui/react'
-import { Comment, Picture, Xmark } from '@gravity-ui/icons'
+import { Comment, Copy, Picture, Xmark } from '@gravity-ui/icons'
 import { useChatStore, MAX_ACTIVE_MESSAGES } from '../../stores/chatStore'
 import { useUpdateStatusStore } from '../../stores/updateStatusStore'
 import ChatBackground from '../../components/ChatBackground'
@@ -25,6 +25,7 @@ import { useTopToast } from './hooks/useTopToast'
 import type { BatchImageMessage } from './types'
 import { isReplySuggestSession } from './replySuggest'
 import { checkOnlineSttConfigReady } from './utils/sttConfig'
+import { formatMessagesAsText } from './utils/copyChatText'
 import { formatSessionTime } from './utils/time'
 import { createLiquidGlassMap, type GlassFilterMap } from '../../utils/liquidGlass'
 
@@ -318,6 +319,29 @@ function ChatPage(_props: ChatPageProps) {
       showTopToast('打开海报窗口失败', false)
     }
   }, [currentSessionId, exitSelectMode, myAvatarUrl, posterMessages, sessions, showTopToast])
+
+  // 复制聊天记录为纯文本（多选操作栏"复制文本"与 ChatHeader"复制已加载记录"共用）
+  const handleCopyChatText = useCallback(async (messagesToCopy: Message[]) => {
+    const session = sessions.find(s => s.username === currentSessionId)
+    if (!session) {
+      showTopToast('当前会话不存在', false)
+      return
+    }
+    try {
+      const text = await formatMessagesAsText(session, messagesToCopy)
+      await navigator.clipboard.writeText(text)
+      const count = text ? text.split('\n').length : 0
+      showTopToast(`已复制 ${count} 条消息`, true)
+    } catch (error) {
+      console.error('[ChatPage] 复制聊天记录失败', error)
+      showTopToast('复制失败', false)
+    }
+  }, [currentSessionId, sessions, showTopToast])
+
+  const handleCopyLoadedMessages = useCallback(
+    () => handleCopyChatText(messages),
+    [handleCopyChatText, messages]
+  )
 
   const exportVoiceMessage = useCallback(async (message: Message, session: ChatSession) => {
     try {
@@ -1694,6 +1718,7 @@ function ChatPage(_props: ChatPageProps) {
                 isBatchDecrypting={isBatchDecrypting}
                 batchDecryptProgress={batchDecryptProgress}
                 onBatchDecrypt={handleBatchDecrypt}
+                onCopyLoadedMessages={handleCopyLoadedMessages}
               />
 
               <div className="message-content-wrapper">
@@ -1734,6 +1759,16 @@ function ChatPage(_props: ChatPageProps) {
                     >
                       <Xmark className="size-4 shrink-0" />
                       取消
+                    </Button>
+                    <Button
+                      className="select-action-bar__btn"
+                      isDisabled={selectedMessages.size === 0}
+                      size="sm"
+                      variant="tertiary"
+                      onPress={() => void handleCopyChatText(posterMessages)}
+                    >
+                      <Copy className="size-4 shrink-0" />
+                      复制文本
                     </Button>
                     <Button
                       className="select-action-bar__btn select-action-bar__btn--primary"

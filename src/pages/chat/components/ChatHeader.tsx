@@ -1,4 +1,4 @@
-import { Aperture, ArrowDownToLine, ArrowsRotateLeft, Bell, BellSlash, Bulb, CircleCheck, CircleDashed, CircleInfo, Ellipsis, FaceRobot, FileText, Layers, LayoutSideContentRight, MagicWand, Microphone, Picture, Sparkles, TrashBin } from '@gravity-ui/icons'
+import { Aperture, ArrowDownToLine, ArrowsRotateLeft, Bell, BellSlash, Bulb, CircleCheck, CircleDashed, CircleInfo, Copy, Ellipsis, FaceRobot, FileText, Layers, LayoutSideContentRight, MagicWand, Microphone, Picture, Sparkles, TrashBin } from '@gravity-ui/icons'
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { AlertDialog, Button, Drawer, Dropdown, Label, Switch, Tooltip } from '@heroui/react'
 import { CloneSelfModal } from './CloneSelfModal'
@@ -119,6 +119,7 @@ interface ChatHeaderProps {
   isBatchDecrypting: boolean
   batchDecryptProgress: Progress
   onBatchDecrypt: () => void | Promise<void>
+  onCopyLoadedMessages: () => void | Promise<void>
 }
 
 export function ChatHeader({
@@ -139,7 +140,8 @@ export function ChatHeader({
   onExportVoiceCloneSample,
   isBatchDecrypting,
   batchDecryptProgress,
-  onBatchDecrypt
+  onBatchDecrypt,
+  onCopyLoadedMessages
 }: ChatHeaderProps) {
   // 向量化（语义索引）状态：null=未知/未启用嵌入，count=已建片段数
   const [vecBuilding, setVecBuilding] = useState(false)
@@ -831,13 +833,19 @@ export function ChatHeader({
                     ...(isBatchTranscribing || !currentSessionId ? ['transcribe'] : []),
                     ...(isBatchDecrypting || !currentSessionId ? ['decrypt'] : []),
                     ...(isExportingVoiceSample || !currentSessionId ? ['voiceSample'] : []),
+                    ...(!currentSessionId ? ['copyText'] : []),
                   ]}
                   onAction={(key) => {
                     if (key === 'transcribe') void onBatchTranscribe()
                     else if (key === 'decrypt') void onBatchDecrypt()
                     else if (key === 'voiceSample') void onExportVoiceCloneSample()
+                    else if (key === 'copyText') void onCopyLoadedMessages()
                   }}
                 >
+                  <Dropdown.Item id="copyText" textValue="复制已加载记录">
+                    <Copy className="size-4 shrink-0 text-muted" />
+                    <Label>复制已加载记录</Label>
+                  </Dropdown.Item>
                   <Dropdown.Item id="transcribe" textValue="批量语音转文字">
                     <Microphone className="size-4 shrink-0 text-muted" />
                     <Label>批量语音转文字</Label>
