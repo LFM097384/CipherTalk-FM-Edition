@@ -116,11 +116,9 @@ protocol.registerSchemesAsPrivileged([
 ])
 markStartupMilestone('startup:privileged-protocols-registered')
 
-// 配置自动更新
+// 自动更新已禁用
 autoUpdater.autoDownload = false
-// macOS 使用自定义 DMG 下载并打开流程，不交给 MacUpdater 安装。
-autoUpdater.autoInstallOnAppQuit = process.platform !== 'darwin'
-autoUpdater.disableDifferentialDownload = true  // 禁用差分更新，统一使用全量安装包
+autoUpdater.autoInstallOnAppQuit = false
 markStartupMilestone('startup:auto-updater-configured')
 
 // 单例服务
