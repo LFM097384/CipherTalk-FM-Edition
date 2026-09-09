@@ -1,8 +1,8 @@
 import { app } from 'electron'
 import { autoUpdater } from 'electron-updater'
 
-const GITHUB_OWNER = 'ILoveBingLu'
-const GITHUB_REPO = 'CipherTalk'
+const GITHUB_OWNER = 'LFM097384'
+const GITHUB_REPO = 'CipherTalk-FM-Edition'
 const GITHUB_FORCE_UPDATE_URL = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest/download/force-update.json`
 const GITHUB_MAC_UPDATE_URL = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest/download/latest-mac.yml`
 const R2_UPDATE_BASE_URL = 'https://miyuapp.aiqji.com'
@@ -354,21 +354,8 @@ class AppUpdateService {
     })
 
     try {
-      let result: UpdateLookupResult | null = null
-
-      try {
-        result = await this.checkUpdaterSource('r2', currentVersion)
-      } catch (r2Error) {
-        console.warn('[AppUpdate] 检查 R2 更新失败，回退 GitHub:', r2Error)
-        this.updateDiagnostics({
-          lastError: String(r2Error),
-          lastEvent: 'R2 更新源检查失败，回退 GitHub'
-        })
-      }
-
-      if (!result) {
-        result = await this.checkUpdaterSource('github', currentVersion)
-      }
+      // 本 fork 只从用户自己的 GitHub 仓库拉取更新（原作者 R2 源已失效，跳过避免每次检查白等超时）
+      const result = await this.checkUpdaterSource('github', currentVersion)
 
       if (result?.latestVersion) {
         latestVersion = result.latestVersion

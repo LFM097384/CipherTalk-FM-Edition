@@ -1,5 +1,5 @@
 import { type SetStateAction, useEffect, useState } from 'react'
-import { Alert, AlertDialog, Button, Card, Checkbox, CheckboxGroup, Chip, Description, InputGroup, Label, ListBox, NumberField, ProgressBar, Radio, RadioGroup, Select, Switch, Tabs, TextField, Typography, type Key } from '@heroui/react'
+import { Alert, AlertDialog, Button, Card, Checkbox, CheckboxGroup, Chip, Description, InputGroup, Label, ListBox, Modal, NumberField, ProgressBar, Radio, RadioGroup, Select, Switch, Tabs, TextField, Typography, type Key } from '@heroui/react'
 import { ArrowDownToLine, ArrowsRotateLeft, CircleCheck, CircleExclamation, Cloud, Cpu, Gpu, Layers, Pause, PlugConnection, Thunderbolt, TrashBin } from '@gravity-ui/icons'
 import * as configService from '../../../services/config'
 import { formatFileSize } from '../utils'
@@ -145,6 +145,11 @@ function SttTab({ active, showMessage }: SttTabProps) {
   const [gpuDownloadProgress, setGpuDownloadProgress] = useState({ overallProgress: 0, currentFile: '' })
   const [confirmState, setConfirmState] = useState<ConfirmState>(emptyConfirm)
 
+  const [gpuInstallGuide, setGpuInstallGuide] = useState<{ show: boolean; gpuName: string }>({ show: false, gpuName: '' })
+  const [isInstallingGpuComponents, setIsInstallingGpuComponents] = useState(false)
+  const [gpuInstallProgress, setGpuInstallProgress] = useState({ overallProgress: 0, currentFile: '' })
+  const [gpuInstallError, setGpuInstallError] = useState('')
+
   useEffect(() => {
     if (active) {
       loadSttModelStatus()
@@ -211,6 +216,14 @@ function SttTab({ active, showMessage }: SttTabProps) {
     })
     return () => removeListener()
   }, [])
+
+  useEffect(() => {
+    if (!gpuInstallGuide.show) return
+    const removeListener = window.electronAPI.sttWhisper.onGPUDownloadProgress((progress) => {
+      setGpuInstallProgress({ overallProgress: progress.overallProgress, currentFile: progress.currentFile })
+    })
+    return () => removeListener()
+  }, [gpuInstallGuide.show])
 
   const loadSttModelStatus = async () => {
     setIsLoadingSttStatus(true)
@@ -505,10 +518,105 @@ function SttTab({ active, showMessage }: SttTabProps) {
     }
   }
 
+  const applyWhisperGpuOn = async () => {
+    setUseWhisperGpu(true)
+    await window.electronAPI.config.set('useWhisperGpu', true)
+    showMessage('Whisper GPU 加速已启用', true)
+  }
+
+  const revertWhisperGpuOff = async (message?: string, success = false) => {
+    setUseWhisperGpu(false)
+    await window.electronAPI.config.set('useWhisperGpu', false)
+    if (message) showMessage(message, success)
+  }
+
+  const closeGpuInstallGuide = () => {
+    setGpuInstallGuide({ show: false, gpuName: '' })
+    setGpuInstallError('')
+  }
+
+  const handleDeclineGpuInstall = async () => {
+    closeGpuInstallGuide()
+    await revertWhisperGpuOff()
+  }
+
+  const handleCancelGpuInstall = async () => {
+    try {
+      const result = await window.electronAPI.sttWhisper.cancelDownloadGPUComponents()
+      if (!result.success || !result.cancelled) {
+        showMessage(result.error || '取消下载失败', false)
+      }
+    } catch (e) {
+      showMessage(`取消下载失败: ${e}`, false)
+    }
+  }
+
+  const handleInstallGpuComponentsNow = async () => {
+    if (isInstallingGpuComponents) return
+    setIsInstallingGpuComponents(true)
+    setGpuInstallError('')
+    setGpuInstallProgress({ overallProgress: 0, currentFile: '' })
+
+    try {
+      const result = await window.electronAPI.sttWhisper.downloadGPUComponents()
+      if (result.success) {
+        showMessage('GPU 组件安装完成', true)
+        closeGpuInstallGuide()
+        await checkGpuComponents()
+        await loadWhisperStatus()
+        await applyWhisperGpuOn()
+      } else if (result.error === DOWNLOAD_PAUSED_MESSAGE) {
+        setGpuInstallError('下载已暂停')
+        await revertWhisperGpuOff()
+      } else {
+        setGpuInstallError(result.error || 'GPU 组件安装失败')
+        await revertWhisperGpuOff()
+      }
+    } catch (e) {
+      setGpuInstallError(`GPU 组件安装失败: ${e}`)
+      await revertWhisperGpuOff()
+    } finally {
+      setIsInstallingGpuComponents(false)
+    }
+  }
+
   const handleToggleWhisperGpu = async (enabled: boolean) => {
-    setUseWhisperGpu(enabled)
-    await window.electronAPI.config.set('useWhisperGpu', enabled)
-    showMessage(enabled ? 'Whisper GPU 加速已启用' : 'Whisper GPU 加速已禁用', true)
+    if (!enabled) {
+      await revertWhisperGpuOff('Whisper GPU 加速已禁用', true)
+      return
+    }
+
+    // 乐观地把开关状态显示为开启，若检测/安装失败会再弹回关闭
+    setUseWhisperGpu(true)
+
+    try {
+      const componentsStatus = await window.electronAPI.sttWhisper.checkGPUComponents()
+      setGpuComponentsStatus(componentsStatus)
+
+      if (componentsStatus.installed) {
+        await applyWhisperGpuOn()
+        return
+      }
+
+      const gpuInfo = await window.electronAPI.sttWhisper.detectGPU()
+      setWhisperGpuInfo(gpuInfo)
+
+      if (gpuInfo.available) {
+        await applyWhisperGpuOn()
+        return
+      }
+
+      const missingCudaMatch = gpuInfo.info.match(/检测到\s*(.+?)，但缺少 CUDA 支持文件/)
+      if (missingCudaMatch) {
+        setGpuInstallError('')
+        setGpuInstallGuide({ show: true, gpuName: missingCudaMatch[1] })
+        return
+      }
+
+      await revertWhisperGpuOff('未检测到 NVIDIA 显卡，无法使用 GPU 加速', false)
+    } catch (e) {
+      await revertWhisperGpuOff(`检测 GPU 状态失败: ${e}`, false)
+    }
   }
 
   const handleSttLanguagesChange = (languages: string[]) => {
@@ -1057,6 +1165,53 @@ function SttTab({ active, showMessage }: SttTabProps) {
     )
   }
 
+  const renderGpuInstallModal = () => (
+    <Modal.Backdrop isOpen={gpuInstallGuide.show} isDismissable={!isInstallingGpuComponents} onOpenChange={(open) => {
+      if (!open && !isInstallingGpuComponents) void handleDeclineGpuInstall()
+    }}>
+      <Modal.Container>
+        <Modal.Dialog className="sm:max-w-105">
+          <Modal.CloseTrigger isDisabled={isInstallingGpuComponents} />
+          <Modal.Header>
+            <Modal.Icon className="bg-default text-foreground">
+              <Gpu className="size-5" />
+            </Modal.Icon>
+            <Modal.Heading>安装 GPU 加速组件</Modal.Heading>
+          </Modal.Header>
+          <Modal.Body className="space-y-3">
+            <Typography.Paragraph size="sm">
+              检测到显卡：<span className="font-medium">{gpuInstallGuide.gpuName}</span>
+            </Typography.Paragraph>
+            <Typography.Paragraph size="sm" color="muted">
+              需要下载约 640MB 组件（来自 whisper.cpp 官方发布），安装后即可使用 GPU 加速
+            </Typography.Paragraph>
+
+            {isInstallingGpuComponents && renderDownloadProgress('GPU 组件安装进度', gpuInstallProgress.overallProgress, handleCancelGpuInstall, gpuInstallProgress.currentFile)}
+
+            {gpuInstallError && !isInstallingGpuComponents && (
+              <Alert status="danger">
+                <Alert.Indicator />
+                <Alert.Content>
+                  <Alert.Title>{gpuInstallError}</Alert.Title>
+                </Alert.Content>
+              </Alert>
+            )}
+          </Modal.Body>
+          <Modal.Footer>
+            {!isInstallingGpuComponents && (
+              <Button variant="tertiary" onPress={() => void handleDeclineGpuInstall()}>暂不</Button>
+            )}
+            {!isInstallingGpuComponents && (
+              <Button variant="primary" onPress={() => void handleInstallGpuComponentsNow()}>
+                <ArrowDownToLine width={16} height={16} /> 立即安装
+              </Button>
+            )}
+          </Modal.Footer>
+        </Modal.Dialog>
+      </Modal.Container>
+    </Modal.Backdrop>
+  )
+
   return (
     <div className="tab-content space-y-6">
       <section className="space-y-2">
@@ -1087,6 +1242,7 @@ function SttTab({ active, showMessage }: SttTabProps) {
       </Tabs>
 
       {renderConfirmDialog()}
+      {renderGpuInstallModal()}
     </div>
   )
 }

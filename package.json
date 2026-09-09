@@ -172,8 +172,8 @@
     },
     "publish": {
       "provider": "github",
-      "owner": "ILoveBingLu",
-      "repo": "CipherTalk",
+      "owner": "LFM097384",
+      "repo": "CipherTalk-FM-Edition",
       "publishAutoUpdate": false
     },
     "win": {
