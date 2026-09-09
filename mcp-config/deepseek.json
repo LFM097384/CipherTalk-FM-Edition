@@ -1,0 +1,18 @@
+{
+  "_comment": "DeepSeek dsh MCP config. This file is already written to ~/.dsh/dsh-mcp.json. If you need to re-add manually, copy the server entry below into your ~/.dsh/dsh-mcp.json servers array.",
+  "_path": "~/.dsh/dsh-mcp.json",
+  "version": 1,
+  "servers": [
+    {
+      "name": "ciphertalk",
+      "transport": "stdio",
+      "command": "node",
+      "args": ["D:/Projects/ciphertalk/CipherTalk/scripts/ciphertalk-mcp-universal.cjs"],
+      "env": {
+        "ELECTRON_RUN_AS_NODE": "1"
+      },
+      "enabled": true,
+      "description": "Read WeChat chat records, contacts, and moments via CipherTalk"
+    }
+  ]
+}

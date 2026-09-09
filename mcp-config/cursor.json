@@ -1,0 +1,12 @@
+{
+  "_comment": "Cursor / generic MCP client config. Merge into your client's MCP settings.",
+  "mcpServers": {
+    "ciphertalk": {
+      "command": "node",
+      "args": ["D:/Projects/ciphertalk/CipherTalk/scripts/ciphertalk-mcp-universal.cjs"],
+      "env": {
+        "ELECTRON_RUN_AS_NODE": "1"
+      }
+    }
+  }
+}

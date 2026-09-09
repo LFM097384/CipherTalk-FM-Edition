@@ -1,0 +1,11 @@
+{
+  "$schema": "https://raw.githubusercontent.com/anthropics/claude-code/main/settings-schema.json",
+  "_comment": "Copy the mcpServers block into your .claude/settings.json or ~/.claude/settings.json",
+  "mcpServers": {
+    "ciphertalk": {
+      "command": "node",
+      "args": ["scripts/ciphertalk-mcp-universal.cjs"],
+      "cwd": "D:/Projects/ciphertalk/CipherTalk"
+    }
+  }
+}
