@@ -1,5 +1,6 @@
 import { basename, delimiter, dirname, join } from 'path'
-import { existsSync, readdirSync, statSync } from 'fs'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
 import { decodeMessageContent, getRowField, coerceRowNumber, quoteInt64ServerIds } from './chat/rowDecoders'
 import { formatWcdbOpenFailure } from './wcdbOpenFailure'
 
@@ -53,6 +54,9 @@ export class WcdbCore {
   private wcdbSetAppVersion: any = null
   private wcdbSetClientInfo: any = null
   private wcdbCheckLicense: any = null
+
+  // 影子副本目录：复制微信数据库到临时目录后再打开，避免直接持有原文件句柄
+  private shadowDir: string | null = null
 
   // 管道监控状态
   private monitorPipeClient: any = null
@@ -145,13 +149,12 @@ export class WcdbCore {
       this.wcdbSetClientInfo = tryBind('int32 wcdb_set_client_info(const char* applicationId, const char* clientType, const char* appVersion)')
       this.wcdbCheckLicense = tryBind('int32 wcdb_check_license()')
       this.wcdbSetAppVersion = tryBind('int32 wcdb_set_app_version(const char* version)')
-      // [CTF] Set client info (keep) but skip return check & license validation
+      // [CTF] Set client info but skip return check — DLL cloud license patched
       if (this.wcdbSetClientInfo) {
         try { this.wcdbSetClientInfo('ciphertalk', 'desktop', this.appVersion) } catch {}
       } else if (this.wcdbSetAppVersion) {
         try { this.wcdbSetAppVersion(this.appVersion) } catch {}
       }
-      // License check bypassed — wcdb_check_license() patched in DLL to return 0
       const initResult = this.wcdbInit()
       if (initResult !== 0) {
         return { success: false, error: this.mapStatusCode(initResult) }
@@ -235,6 +238,75 @@ export class WcdbCore {
     return null
   }
 
+  // 影子副本自动清理：进程被强杀时 cleanupShadowCopy 不会执行，残留的整份 db_storage
+  // 副本会迅速吃满系统盘（实测 38 个残留副本占 22.9GB，导致 ENOSPC 无法打开数据库）。
+  // 每个副本带 .owner 标记（pid + 创建时间），清扫时按 pid 是否存活精确判断；
+  // 无标记的旧版副本按 mtime 超过 24 小时兜底，宁保守不误删正在使用的副本。
+  private static readonly SHADOW_OWNER_FILE = '.owner'
+  private static readonly SHADOW_LEGACY_MAX_AGE_MS = 24 * 60 * 60 * 1000
+
+  private writeShadowOwnerMarker(shadow: string): void {
+    try {
+      writeFileSync(join(shadow, WcdbCore.SHADOW_OWNER_FILE), JSON.stringify({ pid: process.pid, createdAt: Date.now() }))
+    } catch { /* 标记失败不影响主流程 */ }
+  }
+
+  private isPidAlive(pid: number): boolean {
+    try { process.kill(pid, 0); return true } catch { return false }
+  }
+
+  private sweepStaleShadowDirs(): void {
+    try {
+      const base = join(tmpdir(), 'ciphertalk-shadow')
+      if (!existsSync(base)) return
+      for (const entry of readdirSync(base)) {
+        const dir = join(base, entry)
+        if (this.shadowDir && dir === this.shadowDir) continue
+        try {
+          if (!statSync(dir).isDirectory()) continue
+          const ownerPath = join(dir, WcdbCore.SHADOW_OWNER_FILE)
+          if (existsSync(ownerPath)) {
+            const owner = JSON.parse(readFileSync(ownerPath, 'utf8'))
+            if (typeof owner?.pid === 'number' && this.isPidAlive(owner.pid)) continue
+          } else if (Date.now() - statSync(dir).mtimeMs < WcdbCore.SHADOW_LEGACY_MAX_AGE_MS) {
+            continue
+          }
+          rmSync(dir, { recursive: true, force: true })
+        } catch { /* 单个目录清理失败跳过（可能正被占用） */ }
+      }
+    } catch { /* 清扫失败不影响主流程 */ }
+  }
+
+  private createShadowCopy(dbStoragePath: string): string {
+    this.cleanupShadowCopy()
+    this.sweepStaleShadowDirs()
+    const shadow = join(tmpdir(), 'ciphertalk-shadow', `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+    const copyDir = (src: string, dest: string, depth = 0) => {
+      if (depth > 5) return
+      mkdirSync(dest, { recursive: true })
+      for (const entry of readdirSync(src, { withFileTypes: true })) {
+        const srcPath = join(src, entry.name)
+        const destPath = join(dest, entry.name)
+        if (entry.isDirectory()) {
+          copyDir(srcPath, destPath, depth + 1)
+        } else if (/\.(db|db-wal|db-shm)$/i.test(entry.name)) {
+          copyFileSync(srcPath, destPath)
+        }
+      }
+    }
+    copyDir(dbStoragePath, shadow)
+    this.shadowDir = shadow
+    this.writeShadowOwnerMarker(shadow)
+    return shadow
+  }
+
+  private cleanupShadowCopy(): void {
+    if (this.shadowDir) {
+      try { rmSync(this.shadowDir, { recursive: true, force: true }) } catch { /* ignore */ }
+      this.shadowDir = null
+    }
+  }
+
   private tryOpenWithCandidates(sessionDbPaths: string[], hexKey: string): { success: boolean; handle?: number; matchedPath?: string; errors: string[] } {
     const errors: string[] = []
     for (const sessionDbPath of sessionDbPaths) {
@@ -275,20 +347,26 @@ export class WcdbCore {
         return false
       }
 
-      const sessionDbPaths = this.getCandidateSessionDbs(dbStoragePath)
+      const shadowPath = this.createShadowCopy(dbStoragePath)
+      const sessionDbPaths = this.getCandidateSessionDbs(shadowPath)
       if (sessionDbPaths.length === 0) {
         console.error('未找到 session.db 文件:', dbStoragePath)
+        this.cleanupShadowCopy()
         return false
       }
 
       const openResult = this.tryOpenWithCandidates(sessionDbPaths, hexKey)
       if (!openResult.success || !openResult.handle) {
         await this.printLogs()
+        this.cleanupShadowCopy()
         return false
       }
 
       const handle = openResult.handle
-      if (handle <= 0) return false
+      if (handle <= 0) {
+        this.cleanupShadowCopy()
+        return false
+      }
 
       this.handle = handle
       this.currentPath = dbPath
@@ -327,6 +405,7 @@ export class WcdbCore {
     this.currentKey = null
     this.currentWxid = null
     this.currentDbStoragePath = null
+    this.cleanupShadowCopy()
   }
 
   shutdown(): void { this.close() }
@@ -350,8 +429,12 @@ export class WcdbCore {
       const dbStoragePath = this.resolveDbStoragePath(dbPath, wxid)
       if (!dbStoragePath) return { success: false, error: `未找到账号目录或 db_storage: ${dbPath}` }
 
-      const sessionDbPaths = this.getCandidateSessionDbs(dbStoragePath)
-      if (sessionDbPaths.length === 0) return { success: false, error: `未找到 session.db 文件: ${dbStoragePath}` }
+      const testShadow = this.createShadowCopy(dbStoragePath)
+      const sessionDbPaths = this.getCandidateSessionDbs(testShadow)
+      if (sessionDbPaths.length === 0) {
+        this.cleanupShadowCopy()
+        return { success: false, error: `未找到 session.db 文件: ${dbStoragePath}` }
+      }
 
       const openResult = this.tryOpenWithCandidates(sessionDbPaths, hexKey)
       if (!openResult.success || !openResult.handle || !openResult.matchedPath) {
@@ -361,13 +444,17 @@ export class WcdbCore {
           attempts: openResult.errors,
           nativeLogs: logs,
         })
+        this.cleanupShadowCopy()
         return {
           success: false,
           error: formatWcdbOpenFailure(logs, openResult.errors),
         }
       }
 
-      if (openResult.handle <= 0) return { success: false, error: '无效的数据库句柄' }
+      if (openResult.handle <= 0) {
+        this.cleanupShadowCopy()
+        return { success: false, error: '无效的数据库句柄' }
+      }
 
       try {
         // 先关闭刚打开的测试句柄，再 shutdown。
@@ -386,6 +473,7 @@ export class WcdbCore {
         this.currentWxid = null
         this.currentDbStoragePath = null
         this.initialized = false
+        this.cleanupShadowCopy()
       } catch (e) {
         console.error('关闭测试数据库时出错:', e)
       }
@@ -402,15 +490,22 @@ export class WcdbCore {
   }
 
   // ============== 查询接口 ==============
-  async execQuery(kind: string, path: string, sql: string): Promise<{ success: boolean; rows?: any[]; error?: string }> {
-    if (!this.initialized || this.handle === null) {
-      return { success: false, error: 'WCDB 未初始化' }
-    }
+  /**
+   * 当前版本的 DLL 无法把 kind 解析为子库文件（日志报“无法解析子库 kind=contact”，返回 rc=-3），
+   * 但显式传子库文件完整路径可以正常打开查询。按微信 4.x 目录约定 <shadow>/<kind>/<kind>.db 兜底。
+   */
+  private resolveSubDbPath(kind: string): string | null {
+    if (!kind || !this.shadowDir) return null
+    const candidate = join(this.shadowDir, kind, `${kind}.db`)
+    return existsSync(candidate) ? candidate : null
+  }
+
+  private execQueryRaw(kind: string, path: string, sql: string): { success: boolean; rc?: number; rows?: any[]; error?: string } {
     try {
       const outJson = [null]
-      const result = this.wcdbExecQuery(this.handle, kind, path || '', sql, outJson)
+      const result = this.wcdbExecQuery(this.handle, kind, path, sql, outJson)
       if (result !== 0 || !outJson[0]) {
-        return { success: false, error: this.mapStatusCode(result) }
+        return { success: false, rc: result, error: this.mapStatusCode(result) }
       }
       const jsonStr = this.koffi.decode(outJson[0], 'char', -1)
       this.wcdbFreeString(outJson[0])
@@ -418,6 +513,23 @@ export class WcdbCore {
     } catch (e: any) {
       return { success: false, error: e.message || String(e) }
     }
+  }
+
+  async execQuery(kind: string, path: string, sql: string): Promise<{ success: boolean; rows?: any[]; error?: string }> {
+    if (!this.initialized || this.handle === null) {
+      return { success: false, error: 'WCDB 未初始化' }
+    }
+    const first = this.execQueryRaw(kind, path || '', sql)
+    // 仅当 DLL 打不开子库（rc=-3）且调用方未显式给路径时，用影子目录里的子库文件重试一次
+    if (first.success || path || first.rc !== -3) {
+      return { success: first.success, rows: first.rows, error: first.error }
+    }
+    const subDb = this.resolveSubDbPath(kind)
+    if (!subDb) {
+      return { success: first.success, rows: first.rows, error: first.error }
+    }
+    const retry = this.execQueryRaw(kind, subDb, sql)
+    return { success: retry.success, rows: retry.rows, error: retry.error }
   }
 
   /**
@@ -432,13 +544,27 @@ export class WcdbCore {
     if (!this.wcdbExecQueryWithParams) {
       return { success: false, error: 'native 未支持参数化查询' }
     }
+    const first = this.execQueryWithParamsRaw(kind, path || '', sql, params)
+    // 同 execQuery：rc=-3 时用影子目录里的子库文件路径重试一次
+    if (first.success || path || first.rc !== -3) {
+      return { success: first.success, rows: first.rows, error: first.error }
+    }
+    const subDb = this.resolveSubDbPath(kind)
+    if (!subDb) {
+      return { success: first.success, rows: first.rows, error: first.error }
+    }
+    const retry = this.execQueryWithParamsRaw(kind, subDb, sql, params)
+    return { success: retry.success, rows: retry.rows, error: retry.error }
+  }
+
+  private execQueryWithParamsRaw(kind: string, path: string, sql: string, params?: any[]): { success: boolean; rc?: number; rows?: any[]; error?: string } {
     try {
       const typed = (params || []).map(this.inferParamDescriptor)
       const argsJson = JSON.stringify(typed)
       const outJson = [null]
-      const result = this.wcdbExecQueryWithParams(this.handle, kind, path || '', sql, argsJson, outJson)
+      const result = this.wcdbExecQueryWithParams(this.handle, kind, path, sql, argsJson, outJson)
       if (result !== 0 || !outJson[0]) {
-        return { success: false, error: this.mapStatusCode(result) }
+        return { success: false, rc: result, error: this.mapStatusCode(result) }
       }
       const jsonStr = this.koffi.decode(outJson[0], 'char', -1)
       this.wcdbFreeString(outJson[0])
