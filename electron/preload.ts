@@ -852,6 +852,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getVoiceData: (sessionId: string, msgId: string, createTime?: number, serverId?: number) => ipcRenderer.invoke('chat:getVoiceData', sessionId, msgId, createTime, serverId),
     getMessagesByDate: (sessionId: string, targetTimestamp: number, limit?: number) =>
       ipcRenderer.invoke('chat:getMessagesByDate', sessionId, targetTimestamp, limit),
+    getMessagesByTimeRange: (sessionId: string, startTime: number, endTime: number, limit?: number) =>
+      ipcRenderer.invoke('chat:getMessagesByTimeRange', sessionId, startTime, endTime, limit),
     getMessage: (sessionId: string, localId: number) => ipcRenderer.invoke('chat:getMessage', sessionId, localId),
     pickRandomMomentFromIndex: () =>
       ipcRenderer.invoke('chat:pickRandomMomentFromIndex'),

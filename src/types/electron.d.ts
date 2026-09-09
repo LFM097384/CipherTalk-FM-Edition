@@ -1311,6 +1311,12 @@ export interface ElectronAPI {
       targetIndex?: number
       error?: string
     }>
+    getMessagesByTimeRange: (sessionId: string, startTime: number, endTime: number, limit?: number) => Promise<{
+      success: boolean
+      messages?: Message[]
+      hasMore?: boolean
+      error?: string
+    }>
     getMessage: (sessionId: string, localId: number) => Promise<{ success: boolean; message?: Message; error?: string }>
     /** 回忆一刻：从 chat_search_index.db 随机索引行再还原消息（方案 A） */
     pickRandomMomentFromIndex: () => Promise<{

@@ -1,5 +1,6 @@
 import { net } from 'electron'
 import { ConfigService } from '../services/config'
+import { appUpdateService } from '../services/appUpdateService'
 import { chatService } from '../services/chatService'
 import { nightlyMemoryService } from '../services/memory/nightlyMemoryService'
 import { getMcpProxyConfig } from '../services/mcp/runtime'
@@ -179,10 +180,33 @@ export function warmupAgentProcess(ctx: MainProcessContext): void {
 }
 
 /**
- * 启动时自动检测应用更新（已禁用）。
+ * 启动时自动检测应用更新。
+ * 只在生产环境触发，结果沿用 app:updateAvailable 推送给主窗口。
  */
-export function checkForUpdatesOnStartup(_ctx: MainProcessContext): void {
-  return
+export function checkForUpdatesOnStartup(ctx: MainProcessContext): void {
+  if (process.env.VITE_DEV_SERVER_URL) {
+    return
+  }
+
+  setTimeout(async () => {
+    try {
+      const result = await appUpdateService.checkForUpdates()
+      ctx.getLogService()?.info('AppUpdate', '启动时检查更新完成', {
+        hasUpdate: result.hasUpdate,
+        currentVersion: result.currentVersion,
+        version: result.version,
+        diagnostics: result.diagnostics
+      })
+
+      const mainWindow = ctx.getMainWindow()
+      if (result.hasUpdate && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('app:updateAvailable', result)
+      }
+    } catch (error) {
+      ctx.getLogService()?.error('AppUpdate', '启动时检查更新失败', { error: String(error) })
+      console.error('启动时检查更新失败:', error)
+    }
+  }, 3000)
 }
 
 /**

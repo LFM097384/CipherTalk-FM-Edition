@@ -11,6 +11,7 @@ import type { ChatSession, Message } from '../../types/models'
 import { BatchDecryptModal } from './components/BatchDecryptModal'
 import { BatchTranscribeModal } from './components/BatchTranscribeModal'
 import { ChatHeader } from './components/ChatHeader'
+import { CopyDateRangeModal } from './components/CopyDateRangeModal'
 import { MessageListVirtual } from './components/MessageListVirtual'
 import { ReplySuggestBar } from './components/ReplySuggestBar'
 import { SessionSidebar } from './components/SessionSidebar'
@@ -220,6 +221,7 @@ function ChatPage(_props: ChatPageProps) {
   const selectAnchorRef = useRef<number | null>(null) // 范围多选（shift+click）的锚点 localId
   const [isCopyingText, setIsCopyingText] = useState(false)
   const [copyTextProgress, setCopyTextProgress] = useState({ done: 0, total: 0 })
+  const [showCopyDateRange, setShowCopyDateRange] = useState(false)
   const [showEnlargeView, setShowEnlargeView] = useState<{ message: Message; content: string } | null>(null)
   const { showTopToast } = useTopToast()
   const [showMessageInfo, setShowMessageInfo] = useState<Message | null>(null) // 消息信息弹窗
@@ -358,11 +360,10 @@ function ChatPage(_props: ChatPageProps) {
     setIsCopyingText(true)
     setCopyTextProgress({ done: 0, total: 0 })
     try {
-      const text = await formatMessagesAsText(session, messagesToCopy, (done, total) => {
+      const { text, count } = await formatMessagesAsText(session, messagesToCopy, (done, total) => {
         setCopyTextProgress({ done, total })
       })
       await navigator.clipboard.writeText(text)
-      const count = text ? text.split('\n').length : 0
       showTopToast(`已复制 ${count} 条消息`, true)
     } catch (error) {
       console.error('[ChatPage] 复制聊天记录失败', error)
@@ -377,6 +378,10 @@ function ChatPage(_props: ChatPageProps) {
     () => handleCopyChatText(messages),
     [handleCopyChatText, messages]
   )
+
+  const handleCopyDateRange = useCallback(() => {
+    setShowCopyDateRange(true)
+  }, [])
 
   const exportVoiceMessage = useCallback(async (message: Message, session: ChatSession) => {
     try {
@@ -1754,6 +1759,7 @@ function ChatPage(_props: ChatPageProps) {
                 batchDecryptProgress={batchDecryptProgress}
                 onBatchDecrypt={handleBatchDecrypt}
                 onCopyLoadedMessages={handleCopyLoadedMessages}
+                onCopyDateRange={handleCopyDateRange}
               />
 
               <div className="message-content-wrapper">
@@ -1904,6 +1910,13 @@ function ChatPage(_props: ChatPageProps) {
         showProgress={showBatchDecryptProgress}
         progress={batchDecryptProgress}
         imageMessages={batchImageMessages}
+      />
+
+      <CopyDateRangeModal
+        isOpen={showCopyDateRange}
+        onOpenChange={setShowCopyDateRange}
+        session={currentSession ?? null}
+        sessionId={currentSessionId}
       />
 
     </div>

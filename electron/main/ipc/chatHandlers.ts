@@ -382,6 +382,14 @@ export function registerChatHandlers(ctx: MainProcessContext): void {
     return result
   })
 
+  ipcMain.handle('chat:getMessagesByTimeRange', async (_, sessionId: string, startTime: number, endTime: number, limit?: number) => {
+    const result = await chatService.getMessagesByTimeRangeForSummary(sessionId, { startTime, endTime, limit: limit || 20000 })
+    if (!result.success) {
+      ctx.getLogService()?.warn('Chat', '按时间范围获取消息失败', { sessionId, startTime, endTime, error: result.error })
+    }
+    return result
+  })
+
   ipcMain.handle('chat:getDatesWithMessages', async (_, sessionId: string, year: number, month: number) => {
     const result = await chatService.getDatesWithMessages(sessionId, year, month)
     if (!result.success) {

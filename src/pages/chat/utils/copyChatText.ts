@@ -2,10 +2,19 @@ import type { ChatSession, Message } from '../../../types/models'
 import { isGroupChat } from './messageGuards'
 
 const VOICE_TRANSCRIBE_CONCURRENCY = 3
+// 相邻两条被实际复制的消息间隔超过此秒数（1小时）时插入时间戳分隔线
+const DIVIDER_GAP_SECONDS = 3600
 
 interface FormattedEntry {
   name: string
   text: string
+  createTime: number
+}
+
+function formatDividerLine(createTime: number): string {
+  const date = new Date(createTime * 1000)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `—————— ${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()} ${pad(date.getHours())}:${pad(date.getMinutes())} ——————`
 }
 
 /**
@@ -15,12 +24,14 @@ interface FormattedEntry {
  * "[语音] 转写文字"；未命中则现场转写（取语音数据 + STT，结果写入缓存），转写链路任一步失败都
  * 保持 "[语音]" 占位、不中断整体复制。现场转写以并发池（上限 3）执行，通过 onProgress 上报进度
  * （total 为需要现场转写的语音条数）。parsedContent 为空的消息（系统消息等）直接跳过。
+ * 相邻两条被实际复制的消息 createTime 间隔超过 1 小时时，在两者之间插入一行独立的时间戳分隔线
+ * （不计入返回的 count）。返回 count 为真正参与格式化的消息条数（不含分隔线）。
  */
 export async function formatMessagesAsText(
   session: ChatSession,
   messages: Message[],
   onProgress?: (done: number, total: number) => void
-): Promise<string> {
+): Promise<{ text: string; count: number }> {
   const group = isGroupChat(session.username)
 
   // 群聊：先解析所有唯一发送者的昵称
@@ -57,7 +68,7 @@ export async function formatMessagesAsText(
       name = session.displayName || session.username
     }
 
-    const entry: FormattedEntry = { name, text }
+    const entry: FormattedEntry = { name, text, createTime: msg.createTime }
     entries.push(entry)
 
     if (msg.localType === 34) {
@@ -113,5 +124,13 @@ export async function formatMessagesAsText(
     )
   }
 
-  return entries.map((e) => `${e.name}: ${e.text}`).join('\n')
+  const lines: string[] = []
+  entries.forEach((e, i) => {
+    if (i > 0 && e.createTime - entries[i - 1].createTime > DIVIDER_GAP_SECONDS) {
+      lines.push(formatDividerLine(e.createTime))
+    }
+    lines.push(`${e.name}: ${e.text}`)
+  })
+
+  return { text: lines.join('\n'), count: entries.length }
 }
