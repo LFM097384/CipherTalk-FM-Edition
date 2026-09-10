@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { app, ipcMain } from 'electron'
 import fs from 'fs'
 import path from 'path'
 import { pathToFileURL } from 'url'
@@ -106,6 +106,21 @@ export function registerSystemHandlers(): void {
     try {
       const fs = await import('fs')
       fs.writeFileSync(filePath, Buffer.from(base64Data, 'base64'))
+      return { success: true }
+    } catch (error: any) {
+      return { success: false, error: error.message }
+    }
+  })
+
+  ipcMain.handle('file:writeText', async (_, filePath: string, content: string) => {
+    try {
+      const downloadsDir = path.resolve(app.getPath('downloads'))
+      const resolvedPath = path.resolve(filePath)
+      if (resolvedPath !== downloadsDir && !resolvedPath.startsWith(downloadsDir + path.sep)) {
+        return { success: false, error: '只允许写入下载目录' }
+      }
+      const fs = await import('fs')
+      fs.writeFileSync(resolvedPath, content, 'utf8')
       return { success: true }
     } catch (error: any) {
       return { success: false, error: error.message }

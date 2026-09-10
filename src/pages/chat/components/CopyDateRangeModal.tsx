@@ -74,7 +74,21 @@ export function CopyDateRangeModal({ isOpen, onOpenChange, session, sessionId }:
         setProgress({ done, total })
       })
       await navigator.clipboard.writeText(text)
-      showTopToast(`已复制 ${count} 条消息`, true)
+      const displayName = session.displayName || session.username
+      const safeName = displayName.replace(/[<>:"/\\|?*]/g, '')
+      const fileName = `聊天记录_${safeName}_${startDate}_${endDate}.txt`
+      try {
+        const downloadsPath = await window.electronAPI.app.getDownloadsPath()
+        const writeResult = await window.electronAPI.file.writeTextFile(`${downloadsPath}\\${fileName}`, text)
+        if (writeResult.success) {
+          showTopToast(`已复制 ${count} 条消息，并存到 下载\\${fileName}`, true)
+        } else {
+          showTopToast(`已复制 ${count} 条消息，txt 保存失败`, true)
+        }
+      } catch (writeError) {
+        console.error('[CopyDateRangeModal] 保存 txt 失败', writeError)
+        showTopToast(`已复制 ${count} 条消息，txt 保存失败`, true)
+      }
       if (result.hasMore) {
         showTopToast('消息过多，仅复制了最近 20000 条', false)
       }

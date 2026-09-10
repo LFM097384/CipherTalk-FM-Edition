@@ -859,6 +859,7 @@ export interface ElectronAPI {
       error?: string
     }>
     writeBase64: (filePath: string, base64Data: string) => Promise<{ success: boolean; error?: string }>
+    writeTextFile: (filePath: string, content: string) => Promise<{ success: boolean; error?: string }>
   }
   shell: {
     openPath: (path: string) => Promise<string>
